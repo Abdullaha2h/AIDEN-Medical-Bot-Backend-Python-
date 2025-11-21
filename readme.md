@@ -1,4 +1,4 @@
-# 🩺 Medical AI Assistant – FastAPI + RAG + Next.js
+# 🩺 AIDEN Medical AI Assistant – FastAPI + RAG + Next.js
 
 A lightweight **AI-powered medical assistant** built using:
 
