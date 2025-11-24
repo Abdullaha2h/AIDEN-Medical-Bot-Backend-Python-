@@ -2,3 +2,8 @@
 __pycache__/
 *.pyc
 *.env
+create_pinecone_index.py
+medical_bot_pinecone.py
+medical_bot.py
+test_bot.py
+Medical pdfs
