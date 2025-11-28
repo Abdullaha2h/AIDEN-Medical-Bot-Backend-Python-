@@ -1,14 +1,31 @@
-# 🩺 AIDEN Medical AI Assistant – FastAPI + RAG + Next.js
+# 🩺 AIDEN Medical AI Assistant – FastAPI + RAG (OpeanAI + Groq (Backup) + Hugging Face) + Next.js
+
+🔗 **Live Preview:**  
+https://aidenpro.vercel.app/
 
 A lightweight **AI-powered medical assistant** built using:
 
 - **FastAPI** (Python backend)
 - **RAG pipeline** (Retrieval-Augmented Generation)
-- **OpenAI / Groq LLM fallback**
+- **OpenAI / Groq LLM as backup**
+- **Hugging face and faiss for embeddings**
 - **Next.js frontend** with chat UI
 - **Markdown-rendered responses**
+- **Pinecone** to save memory on deployment
 
 This project is designed for portfolios, demos, and learning full-stack AI integration.
+
+---
+
+## 🚀 Tech Stack (Frontend)
+
+- **React**
+- **TypeScript**
+- **Tailwind CSS**
+- **Shadcn/UI** components
+- **Lucide React Icons**
+- **Dark / Light mode** with Theme Provider
+- **Responsive UI**
 
 ---
 
