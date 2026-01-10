@@ -1,0 +1,145 @@
+# create_pinecone_index.py
+"""
+Build (or update) a Pinecone index from PDFs in `medical pdfs/`.
+Usage:
+  python create_pinecone_index.py
+
+This reads PDFs, splits them, computes embeddings (OpenAI preferred,
+HuggingFace fallback) and upserts vectors to Pinecone.
+"""
+from dotenv import load_dotenv
+import os
+import math
+from pathlib import Path
+from typing import List
+
+load_dotenv()
+
+# env
+OPENAI_KEY = os.getenv("OPENAI_API_KEY")
+PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
+PINECONE_ENVIRONMENT = os.getenv("PINECONE_ENVIRONMENT")  # e.g. "us-west1-gcp"
+PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME", "medical-knowledge")
+
+if not PINECONE_API_KEY or not PINECONE_ENVIRONMENT:
+    raise SystemExit("PINECONE_API_KEY and PINECONE_ENVIRONMENT must be set in .env")
+
+# Document loading and splitting
+from langchain_community.document_loaders import PyPDFLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+# Embeddings wrappers (OpenAI or HF)
+def get_embedding_model():
+    # Prefer OpenAI
+    if OPENAI_KEY and len(OPENAI_KEY) > 20:
+        try:
+            from openai import OpenAI
+            from langchain_openai import OpenAIEmbeddings
+            # quick test (no heavy cost)
+            client = OpenAI(api_key=OPENAI_KEY)
+            client.embeddings.create(model="text-embedding-3-small", input="hello")
+            print("[✓] OpenAI embeddings available")
+            return OpenAIEmbeddings(model="text-embedding-3-small"), 1536
+        except Exception as e:
+            print("[!] OpenAI embeddings not available:", e)
+
+    # Fallback to HuggingFace
+    from langchain_huggingface import HuggingFaceEmbeddings
+    print("[✓] Using HuggingFace embeddings (fallback)")
+    # all-MiniLM-L6-v2 -> 384 ; all-mpnet-base-v2 -> 768. Adjust if you change model.
+    model = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+    return model, 384
+
+embed_model, EMBEDDING_DIM = get_embedding_model()
+
+# Pinecone init - UPDATED FOR V3+
+from pinecone import Pinecone, ServerlessSpec
+
+# Initialize Pinecone client
+pc = Pinecone(api_key=PINECONE_API_KEY)
+
+# Create index if not exists - UPDATED
+existing_indexes = [index.name for index in pc.list_indexes()] if pc.list_indexes() else []
+
+if PINECONE_INDEX_NAME not in existing_indexes:
+    print(f"[+] Creating Pinecone index `{PINECONE_INDEX_NAME}` with dim={EMBEDDING_DIM}...")
+    pc.create_index(
+        name=PINECONE_INDEX_NAME, 
+        dimension=EMBEDDING_DIM, 
+        metric="cosine",
+        spec=ServerlessSpec(
+            cloud='aws',
+            region='us-east-1'  # Adjust region as needed
+        )
+    )
+else:
+    print(f"[+] Pinecone index `{PINECONE_INDEX_NAME}` already exists.")
+
+# Connect to index - UPDATED
+index = pc.Index(PINECONE_INDEX_NAME)
+
+# 1) Load PDFs
+pdf_folder = Path("medical pdfs")
+if not pdf_folder.exists():
+    raise SystemExit("Folder `medical pdfs` not found. Place your PDFs there.")
+
+pdf_files = [p for p in pdf_folder.glob("*.pdf")]
+if not pdf_files:
+    raise SystemExit("No PDFs found in `medical pdfs` folder.")
+
+print(f"[+] Found {len(pdf_files)} pdfs")
+
+all_docs = []
+for pdf in pdf_files:
+    print("Loading:", pdf)
+    loader = PyPDFLoader(str(pdf))
+    pages = loader.load()
+    all_docs.extend(pages)
+
+print(f"[+] Loaded {len(all_docs)} pages")
+
+# 2) Split into chunks
+splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=200)
+chunks = splitter.split_documents(all_docs)
+print(f"[+] Created {len(chunks)} text chunks")
+
+# 3) Compute embeddings & upsert to Pinecone in batches
+BATCH_SIZE = 64
+
+def chunk_iter(lst, size):
+    for i in range(0, len(lst), size):
+        yield lst[i : i + size]
+
+print("[+] Upserting to Pinecone...")
+total_vectors = 0
+for batch in chunk_iter(chunks, BATCH_SIZE):
+    texts = [d.page_content for d in batch]
+    # compute embeddings (use embed_documents if available)
+    try:
+        embeddings = embed_model.embed_documents(texts)
+    except Exception:
+        # fallback to per-item embed_query
+        embeddings = [embed_model.embed_query(t) for t in texts]
+
+    # prepare vectors with metadata - UPDATED for Pinecone v3+
+    vectors = []
+    for i, emb in enumerate(embeddings):
+        # create unique id: use file, page, chunk index if available
+        meta = {
+            "text": texts[i],
+            "source": batch[i].metadata.get("source", "unknown"),
+            "page": batch[i].metadata.get("page", 0),
+        }
+        idx_id = f"doc-{hash(texts[i]) & ((1<<63)-1)}"  # deterministic-ish id
+        vectors.append({
+            "id": idx_id, 
+            "values": emb, 
+            "metadata": meta
+        })
+
+    # upsert batch - UPDATED
+    index.upsert(vectors=vectors)
+    total_vectors += len(vectors)
+    print(f"  upserted {len(vectors)} vectors (total: {total_vectors})")
+
+print(f"[✓] Done. Pinecone index populated with {total_vectors} vectors.")

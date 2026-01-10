@@ -66,8 +66,17 @@ if embedding_model is None:
 from pinecone import Pinecone
 
 pc = Pinecone(api_key=PINECONE_API_KEY)
-index = pc.Index(PINECONE_INDEX_NAME)
-print(f"[✓] Connected to Pinecone index: {PINECONE_INDEX_NAME}")
+
+# Select Index based on the model being used
+if use_openai_embeddings:
+    # 1536 dims
+    target_index_name = os.getenv("PINECONE_INDEX_NAME", "medical-knowledge")
+else:
+    # 384 dims (Backup)
+    target_index_name = os.getenv("PINECONE_INDEX_BACKUP_NAME", "medical-knowledge-backup")
+
+index = pc.Index(target_index_name)
+print(f"[✓] Connected to Pinecone index: {target_index_name}")
 
 # ------------------ Retrieval function using Pinecone ------------------
 def retrieve_relevant_texts(query: str, k: int = 6) -> List[str]:
