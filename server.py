@@ -11,8 +11,6 @@ from medical_bot_pinecone import medical_chat
 # ----------------- FastAPI setup -----------------
 app = FastAPI(title="Medical Assistant Bot")
 
-chat_history_store = {}  # store per user if needed (optional)
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # allow all origins
@@ -30,16 +28,56 @@ class ChatPayload(BaseModel):
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ----------------- Endpoint -----------------
+import time
+
+class SessionStore:
+    def __init__(self, max_history=20, ttl_seconds=3600):
+        self.store = {}  # {user_id: {"history": [], "last_active": timestamp}}
+        self.max_history = max_history
+        self.ttl_seconds = ttl_seconds
+
+    def get_history(self, user_id):
+        self._cleanup()
+        if user_id not in self.store:
+            self.store[user_id] = {"history": [], "last_active": time.time()}
+        
+        # Update last active time
+        self.store[user_id]["last_active"] = time.time()
+        return self.store[user_id]["history"]
+
+    def add_message(self, user_id, role, content):
+        if user_id not in self.store:
+            self.get_history(user_id)
+        
+        history = self.store[user_id]["history"]
+        history.append({"role": role, "content": content})
+        
+        # Validation: Limit history size
+        if len(history) > self.max_history:
+             self.store[user_id]["history"] = history[-self.max_history:]
+             
+        self.store[user_id]["last_active"] = time.time()
+
+    def _cleanup(self):
+        """Remove sessions older than TTL"""
+        now = time.time()
+        expired_users = [
+            uid for uid, data in self.store.items() 
+            if now - data["last_active"] > self.ttl_seconds
+        ]
+        for uid in expired_users:
+            del self.store[uid]
+
+# Initialize the session store (1 hour timeout)
+session_store = SessionStore(max_history=20, ttl_seconds=3600)
+
 @app.post("/chat")
 async def chat(payload: ChatPayload):
     user_input = payload.message.strip()
     user_id = payload.user_id
 
-    if user_id not in chat_history_store:
-        chat_history_store[user_id] = []
-
-    chat_history = chat_history_store[user_id]
+    # Get history and clean up old sessions
+    chat_history = session_store.get_history(user_id)
 
     logger.info(f"User ({user_id}) input: {user_input}")
 
@@ -50,7 +88,9 @@ async def chat(payload: ChatPayload):
         logger.error(f"Error in medical_chat: {e}")
         reply = "⚠️ Sorry, something went wrong while processing your request."
 
-    chat_history.append({"role": "assistant", "content": reply})
+    # Update the store with the assistant's reply
+    # This appends to the history list AND ensures limits/timestamps are updated
+    session_store.add_message(user_id, "assistant", reply)
 
     return {"reply": reply, "history": chat_history}
 
